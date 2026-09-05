@@ -94,15 +94,25 @@ jobs:
               echo 'shards=[]' >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            # default builders = waiting count (capped 20), unless workflow_dispatch overrides
+            # default builders = routable waiting for this BUILDER_CLASS (capped 20), unless workflow_dispatch overrides
             raw="${{ inputs.builders }}"
-            # if builders input is the default "4" and waiting differs, use waiting; inputs.builders is always set, so check if waiting !=4 and raw==4
-            if [ "$raw" = "4" ] && [ "$waiting" -gt 0 ]; then
-              n="$waiting"
+            my_class="${{ inputs.builder_class }}"
+            if { [ -z "$raw" ] || [ "$raw" = "4" ] || [ "$raw" = "0" ] || [ "$raw" = "6" ]; } && [ "$waiting" -gt 0 ]; then
+              if echo "$my_class" | grep -qE '^[0-9]+$'; then
+                routable=$(echo "$resp" | jq --argjson my "$my_class" '[.waiting.packages[] | select(.build_class|type=="number" and . <= $my)] | length' 2>/dev/null || echo 0)
+              else
+                routable="$waiting"
+              fi
+              if [ "$routable" -eq 0 ]; then
+                echo "No routable jobs for class $my_class — no builders needed"
+                echo 'shards=[]' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              n="$routable"
               if [ "$n" -gt 20 ]; then n=20; fi
               if [ "$n" -lt 1 ]; then n=1; fi
               shards=$(seq 1 "$n" | jq -R . | jq -s -c 'map(tonumber)')
-              echo "Queue waiting=$waiting → shards=$shards (from queue)"
+              echo "Queue routable=$routable (waiting=$waiting) for class $my_class → shards=$shards"
               echo "shards=$shards" >> "$GITHUB_OUTPUT"
               exit 0
             fi
@@ -121,6 +131,7 @@ jobs:
           echo "shards=$shards" >> "$GITHUB_OUTPUT"
 
   builder:
+    if: needs.matrix.outputs.shards != '[]' && needs.matrix.outputs.shards != ''
     needs: matrix
     runs-on: ubuntu-latest
     timeout-minutes: 350
