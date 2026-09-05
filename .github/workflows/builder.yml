@@ -1,7 +1,7 @@
 name: Chaotic Builder
 on:
   schedule:
-    - cron: "30 */3 * * *"
+    - cron: "40 */3 * * *"
   workflow_dispatch:
     inputs:
       builders:
@@ -170,80 +170,4 @@ jobs:
       - name: Run builder
         run: bash scripts/run-builder.sh
         timeout-minutes: 345
-
-      - name: Queue-aware retrigger
-        if: always()
-        run: |
-          set -euo pipefail
-          command -v curl >/dev/null 2>&1 || apk add --no-cache curl || true
-          command -v jq >/dev/null 2>&1 || apk add --no-cache jq || true
-          if [ -z "${MANAGER_URL:-}" ]; then
-            echo "MANAGER_URL not set — skipping retrigger"
-            exit 0
-          fi
-
-          url="${MANAGER_URL%/}/api/queue/stats"
-          echo "Checking queue at $url ..."
-          resp=""
-          if ! resp=$(curl -sf --max-time 10 "$url" 2>&1); then
-            echo "Failed to fetch $url: $resp" >&2
-            echo "Skipping retrigger — cron will recover"
-            exit 0
-          fi
-          echo "$resp" | head -c 2000; echo
-
-          waiting=$(echo "$resp" | jq -r '.waiting.count // 0' 2>/dev/null || echo 0)
-          active=$(echo "$resp" | jq -r '.active.count // 0' 2>/dev/null || echo 0)
-          idle=$(echo "$resp" | jq -r '.idle.count // 0' 2>/dev/null || echo 0)
-          total=$((waiting + active))
-
-          echo "Queue: waiting=$waiting active=$active total=$total idle=$idle"
-          if [ "$total" -eq 0 ]; then
-            echo "Queue empty — not retriggering. On-schedule will start builders when needed."
-            exit 0
-          fi
-
-          my_class="${{ inputs.builder_class }}"
-          if echo "$my_class" | grep -qE '^[0-9]+$'; then
-            routable=$(echo "$resp" | jq --argjson my "$my_class" '[.waiting.packages[] | select(.build_class|type=="number" and . <= $my)] | length' 2>/dev/null || echo 0)
-            if [ "$routable" -eq 0 ]; then
-              echo "No waiting job routable by BUILDER_CLASS=$my_class (routable=$routable, waiting=$waiting) — skipping retrigger, saves GH minutes"
-              exit 0
-            fi
-            echo "Routable jobs for class $my_class: $routable"
-          fi
-          echo "Queue non-empty and routable — retriggering..."
-
-          repo="${GITHUB_REPOSITORY}"
-          builders="${{ inputs.builders }}"
-          runtime="${{ inputs.runtime }}"
-          manager_url="${{ inputs.manager_url || 'https://builds.garudalinux.org' }}"
-          builder_class="${{ inputs.builder_class }}"
-
-          command -v gh >/dev/null 2>&1 || apk add --no-cache github-cli || true
-
-          tried=""
-          for wf in ".github/workflows/actions-builder.yml" "actions-builder/.github/workflows/builder.yml" "builder.yml"; do
-            echo "Trying gh workflow run $wf ..."
-            if gh workflow run "$wf" --repo "$repo" \
-                -f builders="$builders" \
-                -f runtime="$runtime" \
-                -f manager_url="$manager_url" \
-                -f builder_class="$builder_class" 2>&1; then
-              echo "Retriggered $wf"
-              exit 0
-            fi
-            tried="$tried $wf"
-          done
-          echo "gh attempts failed (tried:$tried) — falling back to API dispatch" >&2
-          curl -sf -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$repo/actions/workflows/actions-builder.yml/dispatches" \
-            -d "{\"ref\":\"${GITHUB_REF_NAME:-main}\",\"inputs\":{\"builders\":\"$builders\",\"runtime\":\"$runtime\",\"manager_url\":\"$manager_url\",\"builder_class\":\"$builder_class\"}}" \
-            && echo "Dispatched via API" || echo "API dispatch failed — cron will recover"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_REF_NAME: ${{ github.ref_name }}
 

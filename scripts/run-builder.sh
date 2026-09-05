@@ -90,15 +90,36 @@ else
     echo "Upload SSH UNREACHABLE $UP_HOST:$UP_PORT" >&2
 fi
 
-if command -v timeout >/dev/null 2>&1; then
-    timeout "$RUNTIME" node /app/index.mjs builder >/dev/null 2>&1 || code=$?
-else
-    node /app/index.mjs builder >/dev/null 2>&1 || code=$?
-fi
-code=${code:-0}
-case "$code" in 124|143|137)
-    echo "Builder runtime expired (timeout $RUNTIME) — clean exit for retrigger"
-    exit 0
-    ;;
-esac
-exit "$code"
+while true; do
+  code=0
+  if command -v timeout >/dev/null 2>&1; then
+      timeout "$RUNTIME" node /app/index.mjs builder >/dev/null 2>&1 || code=$?
+  else
+      node /app/index.mjs builder >/dev/null 2>&1 || code=$?
+  fi
+  code=${code:-0}
+  case "$code" in 124|143|137)
+      echo "Builder runtime expired (timeout $RUNTIME) — clean exit for retrigger"
+      exit 0
+      ;;
+  esac
+  if [ "$code" -ne 0 ]; then
+      exit "$code"
+  fi
+  url="${MANAGER_URL%/}/api/queue/stats"
+  if [ -z "${MANAGER_URL:-}" ]; then
+      echo "Queue done — shard exit"
+      exit 0
+  fi
+  if ! resp=$(curl -sf --max-time 10 "$url" 2>/dev/null); then
+      echo "Queue check failed — shard exit"
+      exit 0
+  fi
+  my_class="${BUILDER_CLASS:-6}"
+  routable=$(echo "$resp" | jq --argjson my "$my_class" '[.waiting.packages[] | select(.build_class|type=="number" and . <= $my)] | length' 2>/dev/null || echo 0)
+  if [ "$routable" -eq 0 ]; then
+      echo "No more routable jobs for class $my_class — shard done"
+      exit 0
+  fi
+  echo "More routable jobs ($routable) for class $my_class — rerunning builder in same shard"
+done
