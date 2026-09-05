@@ -78,9 +78,37 @@ jobs:
   matrix:
     runs-on: ubuntu-latest
     outputs:
-      shards: ${{ steps.mk.outputs.shards }}
+      shards: ${{ steps.check.outputs.shards || steps.mk.outputs.shards }}
+    env:
+      MANAGER_URL: ${{ inputs.manager_url || 'https://builds.garudalinux.org' }}
     steps:
+      - id: check
+        run: |
+          url="${MANAGER_URL%/}/api/queue/stats"
+          if resp=$(curl -sf --max-time 10 "$url" 2>/dev/null); then
+            waiting=$(echo "$resp" | jq -r '.waiting.count // 0' 2>/dev/null || echo 0)
+            active=$(echo "$resp" | jq -r '.active.count // 0' 2>/dev/null || echo 0)
+            total=$((waiting + active))
+            if [ "$total" -eq 0 ]; then
+              echo "Queue empty at start — no builders needed"
+              echo 'shards=[]' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            # default builders = waiting count (capped 20), unless workflow_dispatch overrides
+            raw="${{ inputs.builders }}"
+            # if builders input is the default "4" and waiting differs, use waiting; inputs.builders is always set, so check if waiting !=4 and raw==4
+            if [ "$raw" = "4" ] && [ "$waiting" -gt 0 ]; then
+              n="$waiting"
+              if [ "$n" -gt 20 ]; then n=20; fi
+              if [ "$n" -lt 1 ]; then n=1; fi
+              shards=$(seq 1 "$n" | jq -R . | jq -s -c 'map(tonumber)')
+              echo "Queue waiting=$waiting → shards=$shards (from queue)"
+              echo "shards=$shards" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
       - id: mk
+        if: steps.check.outputs.shards == ''
         run: |
           raw="${{ inputs.builders }}"
           n=$(echo "$raw" | tr -d -c '0-9')
@@ -116,6 +144,7 @@ jobs:
       BUILDER_HOSTNAME: gh-${{ matrix.shard }}
       BUILDER_CLASS: ${{ inputs.builder_class }}
       BUILDER_TIMEOUT: "3600"
+      BUILDER_EXIT_AFTER_BUILD: "true"
       BUILDER_BUILD_DIR_HOST: /tmp/shared/build
       SHARED_PATH: /tmp/shared
       BUILDER_RUNTIME: ${{ inputs.runtime || '340m' }}
