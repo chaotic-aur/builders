@@ -22,7 +22,7 @@ on:
       builder_class:
         description: "BUILDER_CLASS filter"
         required: false
-        default: "4"
+        default: "6"
         type: string
   workflow_call:
     inputs:
@@ -40,7 +40,7 @@ on:
         type: string
       builder_class:
         required: false
-        default: "4"
+        default: "6"
         type: string
     secrets:
       REDIS_PASSWORD:
