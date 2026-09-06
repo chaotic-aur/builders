@@ -1,6 +1,6 @@
 # GitHub Actions Builders
 
-Free builders that run on `ubuntu-latest`. They tunnel to Redis and build packages.
+Free builders that run on `ubuntu-latest`. They tunnel to Redis and run build jobs distributed by Chaotic Manager.
 
 ## What it does
 
@@ -15,9 +15,9 @@ Free builders that run on `ubuntu-latest`. They tunnel to Redis and build packag
 1. Each runner starts a builder. The builder name is `gh-1`, `gh-2`, and more.
 2. The builder opens a tunnel: `autossh -L 6380:127.0.0.1:6379`.
 3. With `BUILDER_EXIT_AFTER_BUILD=true` the builder builds one package and exits.
-4. Without it, the builder runs for `340m`.
-5. After the builder stops, the last step checks `https://builds.garudalinux.org/api/queue/stats`.
-6. If jobs remain, it starts new builders with the same inputs. If the queue is empty at start, it starts no builders.
+4. Without it, the builder runs for `340m` or whatever is given as input.
+5. After the builder stops, `https://builds.garudalinux.org/api/queue/stats` is checked queued packages.
+6. If processable jobs remain, it starts the builder again, otherwise, the run finishes.
 
 ## Use
 
@@ -29,12 +29,11 @@ Add this file to your repo:
 name: Chaotic Builder
 on:
   workflow_dispatch:
-  schedule: [{ cron: "40 */3 * * *" }]
 jobs:
   call-builder:
     uses: chaotic-aur/builders/.github/workflows/builder.yml@main
     with:
-      builders: 4
+      builders: 
       runtime: "340m"
       manager_url: https://builds.garudalinux.org
       builder_class: "6"
@@ -68,13 +67,7 @@ Do not set `REDIS_HOST`. The tunnel sets it to `127.0.0.1`.
 
 ## Settings
 
-- `builders: 4` starts 4 runners (`gh-1` to `gh-4`). Maximum is `20`. If you do not set it, it uses the number of waiting jobs.
+- `builders: 4` starts 4 runners (`gh-1` to `gh-4`). Maximum is `20`. If you do not set it, it uses the number of waiting and processable jobs.
 - `runtime: 340m` leaves time for the queue check.
 - `builder_class: "6"` builds packages with `build_class` `6` or less.
-- `BUILDER_EXIT_AFTER_BUILD=true` makes each runner build one package and exit.
-
-The workflow allows only one run at a time for `chaotic-builder`. New runs wait.
-
-## Schedule
-
-The workflow runs at `40 */3 * * *` (every 3 hours at `:40`). If builds are still running, the new run waits.
+- `BUILDER_EXIT_AFTER_BUILD=true` makes each runner build one package and exit when no more processable jobs can be handled.
